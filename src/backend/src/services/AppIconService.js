@@ -5,6 +5,7 @@ const { NodePathSelector } = require("../filesystem/node/selectors");
 const { Endpoint } = require("../util/expressutil");
 const { buffer_to_stream } = require("../util/streamutil");
 const BaseService = require("./BaseService");
+const { DB_READ } = require("./database/consts");
 
 const ICON_SIZES = [16,32,64,128,256,512];
 
@@ -80,7 +81,7 @@ class AppIconService extends BaseService {
             new NodePathSelector('/system/app_icons')
         );
 
-        this.dir_app_icons = dir_app_icons;
+        return this.dir_app_icons = dir_app_icons;
     }
 
     get_sharp ({ metadata, input }) {
@@ -130,6 +131,106 @@ class AppIconService extends BaseService {
         svc_event.on('app.new-icon', async (_, data) => {
             await this.create_app_icons({ data });
         });
+
+        // Start doing app migrations if necessary
+        this.migrate_apps();
+    }
+
+    async create_app_icons ({ data }) {
+        const svc_su = this.services.get('su');
+        const dir_app_icons = await this.get_app_icons();
+
+        // Writing icons as the system user
+        const icon_jobs = [];
+        for ( const size of ICON_SIZES ) {
+            icon_jobs.push((async () => {
+                await svc_su.sudo(async () => {
+                    const filename = `${data.app_uid}-${size}.png`;
+                    console.log('FILENAME', filename);
+                    const data_url = data.data_url;
+                    const base64 = data_url.split(',')[1];
+                    const input = Buffer.from(base64, 'base64');
+                    
+                    // NOTE: A stream would be more ideal than a buffer here
+                    //       but we have no way of knowing the output size
+                    //       before we finish processing the image.
+                    const output = await this.modules.sharp(input)
+                        .resize(size)
+                        .png()
+                        .toBuffer();
+                    
+                    const sys_actor = await svc_su.get_system_actor();
+                    const hl_write = new HLWrite();
+                    await hl_write.run({
+                        destination_or_parent: dir_app_icons,
+                        specified_name: filename,
+                        overwrite: true,
+                        actor: sys_actor,
+                        user: sys_actor.type.user,
+                        no_thumbnail: true,
+                        file: {
+                            size: output.length,
+                            name: filename,
+                            mimetype: 'image/png',
+                            type: 'image/png',
+                            stream: buffer_to_stream(output),
+                        },
+                    });
+                })
+            })());
+        }
+        await Promise.all(icon_jobs);
+    }
+
+    async migrate_apps () {
+        const db = this.services.get('database').get(DB_READ, 'app-icon-mig');
+        const dir_app_icons = await this.get_app_icons();
+
+        let i=0;
+        for (;;) {
+            const apps = await db.read(
+                'SELECT `uid`, `icon` FROM `apps` LIMIT 1 OFFSET '+i,
+            );
+            i++;
+
+            if ( apps.length === 0 ) {
+                this.noticeme('No more apps to migrate');
+                break;
+            }
+
+            const app = apps[0];
+            this.log.info('checking if icon migrated', {
+                app: app.uid
+            });
+
+            if ( ! app.icon ) {
+                this.log.info('no icon to migrate', {
+                    app: app.uid
+                });
+                continue;
+            }
+
+            const node = await dir_app_icons.getChild(`${app.uid}-32.png`);
+            if ( await node.exists() ) {
+                this.log.info('icon already migrated', {
+                    app: app.uid
+                });
+                continue;
+            }
+
+            this.log.info('migrating icon', {
+                app: app.uid
+            });
+            await this.create_app_icons({
+                data: {
+                    app_uid: app.uid,
+                    data_url: app.icon,
+                },
+            });
+
+            // 200ms delay to prevent overloading the system
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
     }
 
     async create_app_icons ({ data }) {
