@@ -154,10 +154,20 @@ class AppIconService extends BaseService {
                     // NOTE: A stream would be more ideal than a buffer here
                     //       but we have no way of knowing the output size
                     //       before we finish processing the image.
-                    const output = await this.modules.sharp(input)
-                        .resize(size)
-                        .png()
-                        .toBuffer();
+                    let output;
+                    try {
+                        output = await this.modules.sharp(input)
+                            .resize(size)
+                            .png()
+                            .toBuffer();
+                    } catch (e) {
+                        this.log.error('Failed to resize icon', {
+                            app: data.app_uid,
+                            size,
+                            error: e,
+                        });
+                        return;
+                    }
                     
                     const sys_actor = await svc_su.get_system_actor();
                     const hl_write = new HLWrite();
@@ -194,7 +204,7 @@ class AppIconService extends BaseService {
             i++;
 
             if ( apps.length === 0 ) {
-                this.noticeme('No more apps to migrate');
+                this.log.noticeme('No more apps to migrate');
                 break;
             }
 
