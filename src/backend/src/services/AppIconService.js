@@ -148,7 +148,7 @@ class AppIconService extends BaseService {
                     const filename = `${data.app_uid}-${size}.png`;
                     console.log('FILENAME', filename);
                     const data_url = data.data_url;
-                    const base64 = data_url.split(',')[1];
+                    const [metadata, base64] = data_url.split(',');
                     const input = Buffer.from(base64, 'base64');
                     
                     // NOTE: A stream would be more ideal than a buffer here
@@ -163,29 +163,39 @@ class AppIconService extends BaseService {
                     } catch (e) {
                         this.log.error('Failed to resize icon', {
                             app: data.app_uid,
+                            metadata,
                             size,
                             error: e,
                         });
                         return;
                     }
                     
-                    const sys_actor = await svc_su.get_system_actor();
-                    const hl_write = new HLWrite();
-                    await hl_write.run({
-                        destination_or_parent: dir_app_icons,
-                        specified_name: filename,
-                        overwrite: true,
-                        actor: sys_actor,
-                        user: sys_actor.type.user,
-                        no_thumbnail: true,
-                        file: {
-                            size: output.length,
-                            name: filename,
-                            mimetype: 'image/png',
-                            type: 'image/png',
-                            stream: buffer_to_stream(output),
-                        },
-                    });
+                    try {
+                        const sys_actor = await svc_su.get_system_actor();
+                        const hl_write = new HLWrite();
+                        await hl_write.run({
+                            destination_or_parent: dir_app_icons,
+                            specified_name: filename,
+                            overwrite: true,
+                            actor: sys_actor,
+                            user: sys_actor.type.user,
+                            no_thumbnail: true,
+                            file: {
+                                size: output.length,
+                                name: filename,
+                                mimetype: 'image/png',
+                                type: 'image/png',
+                                stream: buffer_to_stream(output),
+                            },
+                        });
+                    } catch (e) {
+                        this.log.error('Failed to write icon', {
+                            app: data.app_uid,
+                            metadata,
+                            size,
+                            error: e,
+                        });
+                    }
                 })
             })());
         }
