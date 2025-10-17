@@ -30,7 +30,7 @@ export default [
             you could set this to something like
             \`site.192.168.555.12.nip.io\`, replacing
             \`192.168.555.12\` with a valid IP address belonging to the server.
-        `
+        `,
     },
     {
         key: 'allow_all_host_values',
@@ -44,7 +44,8 @@ export default [
         description: `
             If true, Puter will allow requests with host headers that end in nip.io.
             This is useful for development, LAN, and VPN configurations.
-        `
+        `,
+        value: true,
     },
     {
         key: 'http_port',
@@ -80,5 +81,5 @@ export default [
             "hide" errors. It is recommended to set this to true when
             debugging, testing, or developing new features.
         `
-    }
-]
+    },
+];
