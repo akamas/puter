@@ -1,78 +1,46 @@
-# /!\ NOTICE /!\
+FROM node:20-alpine AS builder
 
-# Many of the developers DO NOT USE the Dockerfile or image.
-# While we do test new changes to Docker configuration, it's
-# possible that future changes to the repo might break it.
-# When changing this file, please try to make it as resiliant
-# to such changes as possible; developers shouldn't need to
-# worry about Docker unless the build/run process changes.
-
-# Build stage
-FROM node:23.9-alpine AS build
-
-# Install build dependencies
-RUN apk add --no-cache git python3 make g++ \
-    && ln -sf /usr/bin/python3 /usr/bin/python
-
-# Set up working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+# Copy root package files and turbo config
+COPY package.json ./
+COPY package-lock.json ./
+COPY turbo.json ./
 
-# Copy the source files
-COPY . .
+# Copy all workspace directories to ensure npm ci can resolve dependencies
+COPY apps/ ./apps/
+COPY packages/ ./packages/
 
-# Install mocha
-RUN npm install -g mocha
+# Install all dependencies (including workspace dependencies)
+RUN npm ci
 
-# Install node modules
-RUN npm cache clean --force && \
-    for i in 1 2 3; do \
-        npm ci && break || \
-        if [ $i -lt 3 ]; then \
-            sleep 15; \
-        else \
-            exit 1; \
-        fi; \
-    done
+# Build the web application
+RUN npm run build --workspace=apps/web
 
-# Run the build command if necessary
-RUN cd src/gui && npm run build && cd -
+# Stage 2: Production Nginx server
+FROM nginx:alpine AS runner
 
-# Production stage
-FROM node:23.9-alpine
+# Create custom Nginx configuration directly in the Dockerfile for SPA routing
+RUN echo "server {" > /etc/nginx/conf.d/default.conf \
+    && echo "    listen 80;" >> /etc/nginx/conf.d/default.conf \
+    && echo "    server_name localhost;" >> /etc/nginx/conf.d/default.conf \
+    && echo "" >> /etc/nginx/conf.d/default.conf \
+    && echo "    root /usr/share/nginx/html;" >> /etc/nginx/conf.d/default.conf \
+    && echo "    index index.html index.htm;" >> /etc/nginx/conf.d/default.conf \
+    && echo "" >> /etc/nginx/conf.d/default.conf \
+    && echo "    location / {" >> /etc/nginx/conf.d/default.conf \
+    && echo "        try_files \$uri \$uri/ /index.html;" >> /etc/nginx/conf.d/default.conf \
+    && echo "    }" >> /etc/nginx/conf.d/default.conf \
+    && echo "" >> /etc/nginx/conf.d/default.conf \
+    && echo "    error_page 500 502 503 504 /50x.html;" >> /etc/nginx/conf.d/default.conf \
+    && echo "    location = /50x.html {" >> /etc/nginx/conf.d/default.conf \
+    && echo "        root /usr/share/nginx/html;" >> /etc/nginx/conf.d/default.conf \
+    && echo "    }" >> /etc/nginx/conf.d/default.conf \
+    && echo "}" >> /etc/nginx/conf.d/default.conf
 
-# Set labels
-LABEL repo="https://github.com/HeyPuter/puter"
-LABEL license="AGPL-3.0,https://github.com/HeyPuter/puter/blob/master/LICENSE.txt"
-LABEL version="1.2.46-beta-1"
+# Copy built assets from the builder stage
+COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 
-# Install git (required by Puter to check version)
-RUN apk add --no-cache git
+EXPOSE 80 443
 
-# Set up working directory
-RUN mkdir -p /opt/puter/app
-WORKDIR /opt/puter/app
-
-# Copy built artifacts and necessary files from the build stage
-COPY --from=build /app/src/gui/dist ./dist
-COPY --from=build /app/node_modules ./node_modules
-COPY . .
-
-# Set permissions
-RUN chown -R node:node /opt/puter/app
-USER node
-
-EXPOSE 4100
-
-HEALTHCHECK --interval=30s --timeout=3s \
-    CMD wget --no-verbose --tries=1 --spider http://puter.localhost:4100/test || exit 1
-
-ENV NO_VAR_RUNTUME=1
-
-# Attempt to fix `lru-cache@11.0.2` missing after build stage
-# by doing a redundant `npm install` at this stage
-RUN npm install
-
-CMD ["npm", "start"]
+CMD ["nginx", "-g", "daemon off;"]
